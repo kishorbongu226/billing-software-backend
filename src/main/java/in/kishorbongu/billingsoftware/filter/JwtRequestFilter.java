@@ -28,58 +28,56 @@ public class JwtRequestFilter extends OncePerRequestFilter {
     private final AppUserDetailsService userDetailsService;
     private final JwtUtil jwtUtil;
 
-    @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
-            throws ServletException, IOException {
+   @Override
+protected void doFilterInternal(HttpServletRequest request,
+                                HttpServletResponse response,
+                                FilterChain filterChain)
+        throws ServletException, IOException {
 
-        log.debug("JwtRequestFilter - Incoming request: {}", request.getRequestURI());
+    final String authHeader = request.getHeader("Authorization");
 
-        final String authHeader = request.getHeader("Authorization");
-        log.debug("JwtRequestFilter - Authorization header received: {}", authHeader);
-
-        String email = null;
-        String jwt = null;
-
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            jwt = authHeader.substring(7);
-            log.debug("JwtRequestFilter - Extracted JWT: {}", jwt);
-
-            try {
-                email = jwtUtil.extractUsername(jwt);
-                log.debug("JwtRequestFilter - Extracted email from JWT: {}", email);
-            } catch (Exception e) {
-                log.error("JwtRequestFilter - Failed extracting username from JWT", e);
-            }
-        } else {
-            log.debug("JwtRequestFilter - No Bearer token found in header");
-        }
-
-        // If we got a username AND there is no security context yet:
-        if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            log.debug("JwtRequestFilter - Loading UserDetails for: {}", email);
-
-            UserDetails userDetails = userDetailsService.loadUserByUsername(email);
-
-            log.debug("JwtRequestFilter - UserDetails loaded. Authorities: {}", userDetails.getAuthorities());
-
-            boolean isValid = jwtUtil.validateToken(jwt, userDetails);
-            log.debug("JwtRequestFilter - Token validation result: {}", isValid);
-
-            if (isValid) {
-                UsernamePasswordAuthenticationToken authToken =
-                    new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
-                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-
-                SecurityContextHolder.getContext().setAuthentication(authToken);
-
-                log.debug("JwtRequestFilter - Authentication set for user: {}", email);
-            } else {
-                log.warn("JwtRequestFilter - JWT is INVALID for user: {}", email);
-            }
-        } else {
-            log.debug("JwtRequestFilter - Email null or authentication already present");
-        }
-
+    // ✅ No Authorization header → continue
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
         filterChain.doFilter(request, response);
+        return;
     }
+
+    final String jwt = authHeader.substring(7);
+
+    // ✅ Guard against "null", empty, or invalid tokens
+    if (jwt == null || jwt.trim().isEmpty() || "null".equalsIgnoreCase(jwt)) {
+        filterChain.doFilter(request, response);
+        return;
+    }
+
+    String email;
+
+    try {
+        email = jwtUtil.extractUsername(jwt);
+    } catch (Exception e) {
+        // ✅ Never crash filter chain
+        filterChain.doFilter(request, response);
+        return;
+    }
+
+    // ✅ Authenticate only if context is empty
+    if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+
+        UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+
+        if (jwtUtil.validateToken(jwt, userDetails)) {
+            UsernamePasswordAuthenticationToken authToken =
+                new UsernamePasswordAuthenticationToken(
+                    userDetails, null, userDetails.getAuthorities());
+
+            authToken.setDetails(
+                new WebAuthenticationDetailsSource().buildDetails(request));
+
+            SecurityContextHolder.getContext().setAuthentication(authToken);
+        }
+    }
+
+    filterChain.doFilter(request, response);
+}
+
 }
